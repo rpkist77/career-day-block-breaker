@@ -1244,6 +1244,9 @@ function App() {
           onPointerDown={(event) => {
             pointerActiveRef.current = true
             updatePaddleFromClientX(event.clientX)
+            if (status === 'ready') {
+              launchBall()
+            }
           }}
           onPointerMove={(event) => {
             if (pointerActiveRef.current) {
