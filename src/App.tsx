@@ -390,6 +390,8 @@ function App() {
   const [cageMode, setCageMode] = useState(false)
   const [blackoutMode, setBlackoutMode] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [tiltEnabled, setTiltEnabled] = useState(false)
+  const [tiltSupport, setTiltSupport] = useState<'unknown' | 'available' | 'denied' | 'unsupported'>('unknown')
   const [ballCount, setBallCount] = useState(1)
   const [blockCount, setBlockCount] = useState(0)
   const [score, setScore] = useState(0)
@@ -423,6 +425,9 @@ function App() {
   const autoShooterShotsRef = useRef(0)
   const autoShooterCooldownRef = useRef(0)
   const paddleExtendTimerRef = useRef(0)
+  const pointerActiveRef = useRef(false)
+  const pointerTargetXRef = useRef(WORLD_WIDTH / 2)
+  const tiltDirectionRef = useRef(0)
 
   const paddleXRef = useRef((WORLD_WIDTH - paddleSize) / 2)
   const keysRef = useRef({ left: false, right: false })
@@ -435,6 +440,20 @@ function App() {
     const extended = paddleExtendTimerRef.current > 0
     return clamp(extended ? paddleSize * 2 : paddleSize, 70, 360)
   }, [paddleSize])
+
+  const updatePaddleFromClientX = useCallback(
+    (clientX: number) => {
+      const canvas = canvasRef.current
+      if (!canvas) {
+        return
+      }
+
+      const rect = canvas.getBoundingClientRect()
+      const relative = clamp((clientX - rect.left) / rect.width, 0, 1)
+      pointerTargetXRef.current = relative * WORLD_WIDTH
+    },
+    [],
+  )
 
   const createBallFromPaddle = useCallback(
     (speed: number, vxBias: number, penetrating: boolean): Ball => {
@@ -577,6 +596,34 @@ function App() {
   }, [highScores])
 
   useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+    if (!('DeviceOrientationEvent' in window)) {
+      setTiltSupport('unsupported')
+      return
+    }
+    setTiltSupport('available')
+  }, [])
+
+  useEffect(() => {
+    if (!tiltEnabled) {
+      tiltDirectionRef.current = 0
+      return
+    }
+
+    const handleOrientation = (event: DeviceOrientationEvent) => {
+      const gamma = event.gamma ?? 0
+      tiltDirectionRef.current = clamp(gamma / 30, -1, 1)
+    }
+
+    window.addEventListener('deviceorientation', handleOrientation)
+    return () => {
+      window.removeEventListener('deviceorientation', handleOrientation)
+    }
+  }, [tiltEnabled])
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (isTextEntryTarget(event.target)) {
         return
@@ -628,15 +675,21 @@ function App() {
       lastFrameRef.current = timestamp
 
       const paddleSpeed = 540
-      const direction = (keysRef.current.right ? 1 : 0) - (keysRef.current.left ? 1 : 0)
-      paddleDirectionRef.current = direction
       const paddleWidth = currentPaddleWidth()
 
-      paddleXRef.current = clamp(
-        paddleXRef.current + direction * paddleSpeed * dt,
-        0,
-        WORLD_WIDTH - paddleWidth,
-      )
+      if (pointerActiveRef.current) {
+        paddleXRef.current = clamp(pointerTargetXRef.current - paddleWidth / 2, 0, WORLD_WIDTH - paddleWidth)
+        paddleDirectionRef.current = 0
+      } else {
+        const keyboardDirection = (keysRef.current.right ? 1 : 0) - (keysRef.current.left ? 1 : 0)
+        const direction = keyboardDirection !== 0 ? keyboardDirection : tiltDirectionRef.current
+        paddleDirectionRef.current = direction
+        paddleXRef.current = clamp(
+          paddleXRef.current + direction * paddleSpeed * dt,
+          0,
+          WORLD_WIDTH - paddleWidth,
+        )
+      }
 
       if (!launchedRef.current && ballsRef.current.length > 0) {
         ballsRef.current[0].x = paddleXRef.current + paddleWidth / 2
@@ -980,6 +1033,34 @@ function App() {
     }
   }, [activatePowerUp, ballSpeed, crazyMode, createBallFromPaddle, currentPaddleWidth, finishRound, status])
 
+  const enableTiltControl = async () => {
+    if (typeof window === 'undefined' || !('DeviceOrientationEvent' in window)) {
+      setTiltSupport('unsupported')
+      return
+    }
+
+    try {
+      const maybeRequest = (DeviceOrientationEvent as typeof DeviceOrientationEvent & {
+        requestPermission?: () => Promise<'granted' | 'denied'>
+      }).requestPermission
+
+      if (typeof maybeRequest === 'function') {
+        const result = await maybeRequest()
+        if (result !== 'granted') {
+          setTiltSupport('denied')
+          setTiltEnabled(false)
+          return
+        }
+      }
+
+      setTiltSupport('available')
+      setTiltEnabled(true)
+    } catch {
+      setTiltSupport('denied')
+      setTiltEnabled(false)
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="title-zone">
@@ -1071,6 +1152,26 @@ function App() {
                 onChange={(event) => setPowerUpBlocks(Number(event.target.value))}
               />
             </label>
+
+            <label>
+              Tilt control
+              <div className="tilt-row">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (tiltEnabled) {
+                      setTiltEnabled(false)
+                      return
+                    }
+                    void enableTiltControl()
+                  }}
+                  disabled={tiltSupport === 'unsupported'}
+                >
+                  {tiltEnabled ? 'Disable Tilt' : 'Enable Tilt'}
+                </button>
+                <span className="tilt-status">{tiltSupport}</span>
+              </div>
+            </label>
           </div>
 
           <label className="crazy">
@@ -1135,7 +1236,30 @@ function App() {
       )}
 
       <section className="game-wrap">
-        <canvas ref={canvasRef} width={WORLD_WIDTH} height={WORLD_HEIGHT} aria-label="Breakout game board" />
+        <canvas
+          ref={canvasRef}
+          width={WORLD_WIDTH}
+          height={WORLD_HEIGHT}
+          aria-label="Breakout game board"
+          onPointerDown={(event) => {
+            pointerActiveRef.current = true
+            updatePaddleFromClientX(event.clientX)
+          }}
+          onPointerMove={(event) => {
+            if (pointerActiveRef.current) {
+              updatePaddleFromClientX(event.clientX)
+            }
+          }}
+          onPointerUp={() => {
+            pointerActiveRef.current = false
+          }}
+          onPointerCancel={() => {
+            pointerActiveRef.current = false
+          }}
+          onPointerLeave={() => {
+            pointerActiveRef.current = false
+          }}
+        />
       </section>
     </main>
   )
