@@ -1019,7 +1019,7 @@ function App() {
         const title = status === 'won' ? 'YOU WIN' : status === 'timeup' ? 'TIME UP' : 'GAME OVER'
         ctx.fillText(title, WORLD_WIDTH / 2, WORLD_HEIGHT / 2 - 10)
         ctx.font = '700 24px "Trebuchet MS", sans-serif'
-        ctx.fillText('Press Enter to Restart', WORLD_WIDTH / 2, WORLD_HEIGHT / 2 + 42)
+        ctx.fillText('Press Enter or Tap Reset Board', WORLD_WIDTH / 2, WORLD_HEIGHT / 2 + 42)
       }
 
       animationRef.current = requestAnimationFrame(step)
@@ -1263,6 +1263,9 @@ function App() {
             pointerActiveRef.current = false
           }}
         />
+        <button type="button" className="reset-board-button" onClick={() => resetGame(textShape)}>
+          Reset Board
+        </button>
       </section>
     </main>
   )
